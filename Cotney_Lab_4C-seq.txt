@@ -1,0 +1,674 @@
+# 1) demultiplex 4C data by viewpoint using cutadapt and check the quality of the cutadapt output
+### Demultiplex using Cutadapt
+# Take fastq files after illumina demultiplexing, run cutadapt with minimum sequence length = 20bp, 20% error and 12 min overlap
+# NAMES correspond to the biological sample or individual sample name of each fastq.gz file.
+# requires primer_list.txt (viewpoint_name	adapter_sequence)
+
+# pipeline.sh
+NAMES="Brain_1 Brain_2 Face_1 Face_2 Heart_1 Heart_2 Limb_1 Limb_2"
+for NAME in $NAMES;
+do 
+  export email="awilderman@uchc.edu"
+  export threads=8
+  export analysisdir=~/ANALYSIS/4C/AS_4C_01_09_2017
+  export fastqdir=~/DATA/4C/AS_4C_01_09_2017
+  export bash_location=~/.bashrc
+  export sample=$NAME
+  cat ~/DATA/4C/AS_4C_01_09_2017/primer_list.txt | awk  '{
+           print \
+           "echo \x22#PBS -m abe" \
+           "\n#PBS -M "ENVIRON["email"] \
+           "\n#PBS -V" \
+           "\n#PBS -N "ENVIRON["sample"]"_"$1"_trim" \
+           "\n#PBS -l nodes=1:ppn="ENVIRON["threads"] \
+           "\nsource "ENVIRON["bash_location"] \
+           "\n\ncd "ENVIRON["analysisdir"] \
+           "\n\ncutadapt -e 0.20 -g "$2" --discard-untrimmed -m 20 -O 12 -f fastq -o "ENVIRON["sample"]"_"$1"_trimmed.fastq ~/DATA/4C/AS_4C_01_09_2017/"ENVIRON["sample"]"_*.fastq.gz >> "ENVIRON["sample"]"_"$1"_trimming_report.txt" \
+           "\n\ngzip "ENVIRON["sample"]"_"$1"_trimmed.fastq\x22 > "ENVIRON["sample"]"_"$1"_trim.pbs"}';
+done
+
+# prepare to run and submit
+chmod +x pipeline.sh
+./pipeline.sh > make_pipeline.sh
+chmod +x make_pipeline.sh
+./make_pipeline.sh
+ls *trim.pbs | awk '{print "qsub "$1}' > submit_pipeline.sh
+chmod +x submit_pipeline.sh
+
+
+### Check statistics on Cutadapt output
+# make_cutadapt_check.sh:
+cd ~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt
+NAMES="Brain_1 Brain_2 Face_1 Face_2 Heart_1 Heart_2 Limb_1 Limb_2"
+for NAME in $NAMES;
+do 
+  export sample=$NAME
+  cat ~/DATA/4C/AS_4C_01_09_2017/primer_list.txt | awk  '{
+           print \
+           "echo \x22grep -i \x27passing filter\x27 "ENVIRON["sample"]"_"$1"_trimming_report.txt > "ENVIRON["sample"]"_"$1"_passing_filter.txt" \
+           "\ngrep -i \x27reads with adapter\x27 "ENVIRON["sample"]"_"$1"_trimming_report.txt > "ENVIRON["sample"]"_"$1"_adapter.txt" \
+           "\ngrep -i \x27too short\x27 "ENVIRON["sample"]"_"$1"_trimming_report.txt > "ENVIRON["sample"]"_"$1"_short.txt\x22" \
+           "\n"}' >> cutadapt_check.sh;
+done
+
+chmod +x make_cutadapt_check.sh
+./make_cutadapt_check.sh
+chmod +x cutadapt_check.sh
+./cutadapt_check.sh > cutadapt_stats.sh
+chmod +x cutadapt_stats.sh
+./cutadapt_stats.sh
+
+
+
+# Examples of how to consolidate stats on these files
+cd <resultsdirectory>
+	ls -1 *short* > cutadapt_file_list.txt
+		for a in $(ls -1 *short*);
+		do
+  			echo "cat "$a" | awk '{print X6}' >> cutadapt_results.txt" >> make_cutadapt_results.sh
+		done
+
+	ls -1 *passing* >> cutadapt_file_list.txt
+		for b in $(ls -1 *passing*);
+		do
+  			echo "cat "$b" | awk '{print X5}' >> cutadapt_results.txt" >> make_cutadapt_results.sh
+		done
+
+	ls -1 *adapter* >> cutadapt_file_list.txt
+		for c in $(ls -1 *adapter*);
+		do
+ 		 	echo "cat "$c" | awk '{print X4}' >> cutadapt_results.txt" >> make_cutadapt_results.sh
+		done
+
+	sed -i 's/X/$/g' make_cutadapt_results.sh
+
+	chmod +x make_cutadapt_results.sh
+	./make_cutadapt_results.sh
+
+	paste cutadapt_file_list.txt cutadapt_results.txt > cutadapt_report.txt
+
+# Get the percent cutadapt stats as well:
+
+# make_percent_reports.sh
+
+cd <resultsdirectory>
+
+	ls *<viewpoint_name>*trimming_report.txt >> ls_list.txt
+
+	grep -i 'too short' *<viewpoint_name>*trimming_report.txt | sed -e 's/ (/\t/g' -e 's/%//g' -e 's/)//g'  -e 's/ /_/g' | cut -f2 >> short_percent.txt
+	paste ls_list.txt short_percent.txt >> short_percent_report.txt
+
+	grep -i 'reads with adapter' *<viewpoint_name>*trimming_report.txt | sed -e 's/ (/\t/g' -e 's/%//g' -e 's/)//g'  -e 's/ /_/g' | cut -f2 >> adapter_percent.txt
+	paste ls_list.txt adapter_percent.txt >> adapter_percent_report.txt
+
+	grep -i 'passing filter' *<viewpoint_name>*trimming_report.txt | sed -e 's/ (/\t/g' -e 's/%//g' -e 's/)//g'  -e 's/ /_/g' | cut -f3 >> passing_percent.txt
+	paste ls_list.txt passing_percent.txt >> passing_percent_report.txt
+
+
+
+### Perform fastqc on the fastq files resulting from Cutadapt
+
+# will need to make a tissue_list.txt that will be in the cutadapt directory
+#	Brain_1
+#	Brain_2
+#	Face_1
+#	Face_2
+#	Heart_1
+#	Heart_2
+#	Limb_1
+#	Limb_2
+
+# fastqc_pipeline.sh
+
+export email="awilderman@uchc.edu"
+export threads=8
+export analysisdir=~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt                           
+export fastqdir=~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt
+export adapterdir=~/DATA/4C/AS_4C_01_09_2017
+export bash_location=~/.bashrc
+export a=viewpoint1
+export b=viewpoint2
+export c=viewpoint3
+export d=viewpoint4
+
+cat tissue_list.txt | awk  '{
+           print \
+           "echo \x22#PBS -m abe" \
+           "\n#PBS -M "ENVIRON["email"] \
+           "\n#PBS -V" \
+           "\n#PBS -N "$1"_trimmed_fastqc" \
+           "\n#PBS -l nodes=1:ppn="ENVIRON["threads"] \
+           "\nsource "ENVIRON["bash_location"] \
+           "\n\ncd "ENVIRON["analysisdir"] \
+           "\n\nfastqc -o "ENVIRON["analysisdir"]" -a "ENVIRON["adapterdir"]"/primer_list.txt "ENVIRON["fastqdir"]"/"$1"_"ENVIRON["a"]"_trimmed_fastq.gz" \
+           "\n\nfastqc -o "ENVIRON["analysisdir"]" -a "ENVIRON["adapterdir"]"/primer_list.txt "ENVIRON["fastqdir"]"/"$1"_"ENVIRON["b"]"_trimmed_fastq.gz" \
+           "\n\nfastqc -o "ENVIRON["analysisdir"]" -a "ENVIRON["adapterdir"]"/primer_list.txt "ENVIRON["fastqdir"]"/"$1"_"ENVIRON["c"]"_trimmed_fastq.gz" \
+           "\n\nfastqc -o "ENVIRON["analysisdir"]" -a "ENVIRON["adapterdir"]"/primer_list.txt "ENVIRON["fastqdir"]"/"$1"_"ENVIRON["d"]"_trimmed_fastq.gz\x22 > "$1"_trimmed_fastqc.pbs"}' > make_trimmed_fastqc.sh       
+           
+# All of these need some extra steps:
+
+chmod +x fastqc_pipeline.sh
+./fastqc_pipeline.sh
+chmod +x make_trimmed_fastqc.sh
+./make_trimmed_fastqc.sh
+ls *fastqc.pbs | awk '{print "qsub "$1}' > submit_fastqc_pipeline.sh
+chmod +x submit_fastqc_pipeline.sh
+./submit_fastqc_pipeline.sh
+
+
+# Create multiqc.pbs to generate multiqc report on the fastqc and cutadapt trimming reports 
+
+#PBS -m abe
+#PBS -M awilderman@uchc.edu
+#PBS -V
+#PBS -N AS_PWS_cutadapt_multiqc
+#PBS -l nodes=1:ppn=1
+source ~/.bashrc
+
+cd ~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt
+multiqc -f -i 4C_trimmed_multi_report -n 4C_trimmed_multiqc .
+
+### Additional quality control for cutadapt data check adapters that are binned more than once (by sort and join)
+# requires a tissue_list.txt (list of Tissue_rep)
+
+# sort_join_pipeline.sh
+
+export email="awilderman@uchc.edu"
+export threads=1
+export analysisdir=~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt
+export fastqdir=~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt
+export bash_location=~/.bashrc
+
+cat ~/ANALYSIS/4C/AS_4C_01_09_2017/cutadapt/tissue_list.txt | awk  '{
+           print \
+           "echo \x22#PBS -m abe" \
+           "\n#PBS -M "ENVIRON["email"] \
+           "\n#PBS -V" \
+           "\n#PBS -N "$1"_trimmed_shared" \
+           "\n#PBS -l nodes=1:ppn="ENVIRON["threads"] \
+           "\nsource "ENVIRON["bash_location"] \
+           "\n\ncd "ENVIRON["analysisdir"] \
+           "\n\ngunzip "$1"_HoxA_*_0.20_"ENVIRON["minoverlap"]".fastq.gz" \
+           "\n\ncat "$1"_viewpoint1_trimmed.fastq | grep '@NS500403' | sed -e 's/@//g' > "$1"_vp1_trimmed_identifiers.txt" \
+           "\n\ncat "$1"_viewpoint2_trimmed.fastq | grep '@NS500403' | sed -e 's/@//g' > "$1"_vp2_trimmed_identifiers.txt" \
+           "\n\ncat "$1"_viewpoint3_trimmed.fastq | grep '@NS500403' | sed -e 's/@//g' > "$1"_vp3_trimmed_identifiers.txt" \
+           "\n\ncat "$1"_viewpoint4_trimmed.fastq | grep '@NS500403' | sed -e 's/@//g' > "$1"_vp4_trimmed_identifiers.txt" \
+           "\n\ncat "$1"_viewpoint5_trimmed.fastq | grep '@NS500403' | sed -e 's/@//g' > "$1"_vp5_trimmed_identifiers.txt" \
+           "\n\ncat "$1"_viewpoint6_trimmed.fastq | grep '@NS500403' | sed -e 's/@//g' > "$1"_vp6_trimmed_identifiers.txt" \
+           "\n\nLANG=en_EN sort -h -k 1,1 "$1"_vp1_trimmed_identifiers.txt > "$1"_vp1_trimmed_identifiers_sorted.txt" \
+           "\n\nLANG=en_EN sort -h -k 1,1 "$1"_vp2_trimmed_identifiers.txt > "$1"_vp2_trimmed_identifiers_sorted.txt" \
+           "\n\nLANG=en_EN sort -h -k 1,1 "$1"_vp3_trimmed_identifiers.txt > "$1"_vp3_trimmed_identifiers_sorted.txt" \
+           "\n\nLANG=en_EN sort -h -k 1,1 "$1"_vp4_trimmed_identifiers.txt > "$1"_vp4_trimmed_identifiers_sorted.txt" \
+           "\n\nLANG=en_EN sort -h -k 1,1 "$1"_vp5_trimmed_identifiers.txt > "$1"_vp5_trimmed_identifiers_sorted.txt" \
+           "\n\nLANG=en_EN sort -h -k 1,1 "$1"_vp6_trimmed_identifiers.txt > "$1"_vp6_trimmed_identifiers_sorted.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp1_trimmed_identifiers_sorted.txt "$1"_vp2_trimmed_identifiers_sorted.txt > "$1"_vp1_vp2_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp1_trimmed_identifiers_sorted.txt "$1"_vp3_trimmed_identifiers_sorted.txt > "$1"_vp1_vp3_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp1_trimmed_identifiers_sorted.txt "$1"_vp4_trimmed_identifiers_sorted.txt > "$1"_vp1_vp4_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp1_trimmed_identifiers_sorted.txt "$1"_vp5_trimmed_identifiers_sorted.txt > "$1"_vp1_vp5_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp1_trimmed_identifiers_sorted.txt "$1"_vp6_trimmed_identifiers_sorted.txt > "$1"_vp1_vp6_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp2_trimmed_identifiers_sorted.txt "$1"_vp3_trimmed_identifiers_sorted.txt > "$1"_vp2_vp3_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp2_trimmed_identifiers_sorted.txt "$1"_vp4_trimmed_identifiers_sorted.txt > "$1"_vp2_vp4_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp2_trimmed_identifiers_sorted.txt "$1"_vp5_trimmed_identifiers_sorted.txt > "$1"_vp2_vp5_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp2_trimmed_identifiers_sorted.txt "$1"_vp6_trimmed_identifiers_sorted.txt > "$1"_vp2_vp6_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp3_trimmed_identifiers_sorted.txt "$1"_vp4_trimmed_identifiers_sorted.txt > "$1"_vp3_vp4_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp3_trimmed_identifiers_sorted.txt "$1"_vp5_trimmed_identifiers_sorted.txt > "$1"_vp3_vp5_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp3_trimmed_identifiers_sorted.txt "$1"_vp6_trimmed_identifiers_sorted.txt > "$1"_vp3_vp6_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp4_trimmed_identifiers_sorted.txt "$1"_vp5_trimmed_identifiers_sorted.txt > "$1"_vp4_vp5_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp4_trimmed_identifiers_sorted.txt "$1"_vp6_trimmed_identifiers_sorted.txt > "$1"_vp4_vp6_trimmed_shared.txt" \
+           "\n\nLANG=en_EN join -1 1 -2 1 "$1"_vp5_trimmed_identifiers_sorted.txt "$1"_vp6_trimmed_identifiers_sorted.txt > "$1"_vp5_vp6_trimmed_shared.txt\x22 > "$1"_trimmed_shared.pbs"}'
+
+chmod +x sort_join_pipeline.sh
+./ sort_join_pipeline.sh > make_sort_join_pipeline.sh
+chmod +x make_sort_join_pipeline.sh
+./ make_sort_join_pipeline.sh
+
+ls *shared.pbs | awk '{print "qsub "$1}' > submit_sort_join_pipeline.sh
+
+# get the number of shared reads and reads passing filter for each tissue and combination of viewpoints
+# change the tissue title each time
+# use this in interactive to check the results of shared
+a=$(wc -l Limb_2_vp1_vp2_trimmed_shared.txt | awk '{print $1}')
+b=$(wc -l Limb_2_vp1_vp3_trimmed_shared.txt | awk '{print $1}')
+c=$(wc -l Limb_2_vp1_vp4_trimmed_shared.txt | awk '{print $1}')  
+d=$(wc -l Limb_2_vp1_vp5_trimmed_shared.txt | awk '{print $1}')
+e=$(wc -l Limb_2_vp1_vp6_trimmed_shared.txt | awk '{print $1}')
+f=$(wc -l Limb_2_vp2_vp3_trimmed_shared.txt | awk '{print $1}')  
+g=$(wc -l Limb_2_vp2_vp4_trimmed_shared.txt | awk '{print $1}')
+h=$(wc -l Limb_2_vp2_vp5_trimmed_shared.txt | awk '{print $1}') 
+i=$(wc -l Limb_2_vp2_vp6_trimmed_shared.txt | awk '{print $1}')
+j=$(wc -l Limb_2_vp3_vp4_trimmed_shared.txt | awk '{print $1}')
+k=$(wc -l Limb_2_vp3_vp5_trimmed_shared.txt | awk '{print $1}')
+l=$(wc -l Limb_2_vp3_vp6_trimmed_shared.txt | awk '{print $1}')  
+m=$(wc -l Limb_2_vp4_vp5_trimmed_shared.txt | awk '{print $1}')
+n=$(wc -l Limb_2_vp4_vp6_trimmed_shared.txt | awk '{print $1}')
+p=$(wc -l Limb_2_vp5_vp6_trimmed_shared.txt | awk '{print $1}')
+
+echo -e "VP1\n$a\tVP2\n$b\t$f\tVP3\n$c\t$g\t$j\tVP4\n$d\t$h\t$k\t$m\tVP5\n$e\t$i\t$l\t$n\t$p"
+
+# similarly to check the results of reads that passed filter for each viewpoint (equal to number of lines in the identifiers file)
+a=$(wc -l Limb_2_vp1_trimmed_identifiers.txt | awk '{print $1}')
+b=$(wc -l Limb_2_vp2_trimmed_identifiers.txt | awk '{print $1}')
+c=$(wc -l Limb_2_vp3_trimmed_identifiers.txt | awk '{print $1}')  
+d=$(wc -l Limb_2_vp4_trimmed_identifiers.txt | awk '{print $1}')
+e=$(wc -l Limb_2_vp5_trimmed_identifiers.txt | awk '{print $1}')
+f=$(wc -l Limb_2_vp6_trimmed_identifiers.txt | awk '{print $1}')  
+
+echo -e "$a\n$b\n$c\n$d\n$e\n$f"
+
+# 2) align the fully demultiplexed 4C data with the genome and generate bedGraphs of the raw data
+### Align with Bowtie2	
+
+<bowtiedirectory>/bowtie2 -p 8 -x <path-to-bowtie-genome> -U <Tissue_rep>_<viewpoint_name>_trimmed.fastq -S <Tissue_rep>_<viewpoint_name>_trimmed.sam
+
+### Convert Sam to Bam 
+
+samtools view -bS <Tissue_rep>_<viewpoint_name>_trimmed.sam > <Tissue_rep>_<viewpoint_name>_trimmed.bam
+
+### Sort Bams
+
+samtools sort -T TEMP -o <Tissue_rep>_<viewpoint_name>_trimmed_sorted.bam <Tissue_rep>_<viewpoint_name>_trimmed.bam
+
+### Make bedGraph files for all
+
+bedtools genomecov -ibam <Tissue_rep>_<viewpoint_name>_trimmed_sorted.bam -bga > <Tissue_rep>_<viewpoint_name>_trimmed.bg
+	
+# 3) prepare the data for analysis with r3Cseq
+
+### Split 4C data bam files 
+# make a bed format with the ranges to remove and use it to split 4C data bam file into "1.5k_near_vp" and "omit_1.5k_near_vp" bam files
+# it is actually removing 1.5kb upstream and 1.5kb downstream from the edges of the viewpoint NlaIII/DpnII fragment so "1.5k_near" is shorthand.
+
+# Create bed files that will be used to split the 4C data bam file:
+
+# paste in this: columns are vp#, viewpoint_name, -1.5kb from left side of NlaIII/DpnII fragment, +1.5kb from right side of NlaIII/DpnII fragment
+echo vp1	viewpoint1	50888274	50891713 > vp1_remove_1.5kb.bed
+echo vp2	viewpoint2	50889686	50893035 > vp2_remove_1.5kb.bed
+echo vp3	viewpoint3	51119551	51122986 > vp3_remove_1.5kb.bed
+echo vp4	viewpoint4	51122174	51125613 > vp4_remove_1.5kb.bed
+echo vp5	viewpoint5	51957704	51961137 > vp5_remove_1.5kb.bed
+echo vp6	viewpoint6	52152952	52156310 > vp6_remove_1.5kb.bed
+
+# example use for viewpoint1:
+
+samtools view -b -h -@ 8 -o Face_1_viewpoint1_trimmed_sorted.bam_reads_1.5k_near_vp.bam -U Face_1_viewpoint1_trimmed_sorted.bam_omit_1.5k_near_vp.bam -L ~/ANALYSIS/4C/RE_files/4cseq_primer_db/vp1_remove_1.5kb.bed  ~/ANALYSIS/4C/Mouse_HoxA_4C_combined/Mouse_HoxA_4C_bowtie2_10_06_2016/Face_1_viewpoint1_trimmed_sorted.bam
+
+### view reads with samtools view -c (reads_outside_viewpoint.bam)
+
+# set environmental variables 
+BAMDIR=~/4C/Mouse_HoxA_4C_Combined/DATA/bam_files/nearvp_range_remove
+WKDIR=~/4C/Mouse_HoxA_4C_Combined/ANALYSIS/r3Cseq
+
+cd <WKDIR>
+ls <BAMDIR>/*trimmed_sorted.bam | awk '{print "samtools view -c -b "$1}' > view_total_reads.sh
+ls *omit* | awk '{print "samtools view -c -b "$1}' > view_reads.sh
+chmod +x *.sh
+./view_total_reads.sh > total_numbers.txt
+ls <BAMDIR>/*trimmed_sorted.bam > total_list.txt
+paste total_list.txt total_numbers.txt > total_reads.txt
+./view_reads.sh > reads_outside.txt
+ls *omit* > reads_outside_list.txt
+paste reads_outside_list.txt reads_outside.txt > read_counts_outside.txt
+
+### Add back a small number of reads near the viewpoint 
+# example script for r3Cseq_pipeline_vp2_mid.sh (adds back .01% of reads near the viewpoint)
+# using the four files that will be used to compare face to brain in r3Cseq
+
+# need the -o and -U output files from samtools in the directory you will call BAMDIR
+
+cd ~/4C/Mouse_HoxA_4C_Combined/ANALYSIS/r3Cseq
+mkdir vp2/mid/Face-Brain/10kb/2_frag
+mkdir vp2/mid/Face-Brain/domainograms/10kb/2_frag
+
+# make the vp2_mid_downsampling.txt file consisting of the tissues and replicates you will be using in one specific r3Cseq analysis
+# it needs to be in the directory with the bam files
+#	<samtools_-o_file>	<percent(=percent x 0.001)>	<new_name_for_downsampled.bam>	<samtools_-U_file>	<Merged_file_name>
+# For the example analysis, mine looked like this:
+#	Brain_1_viewpoint2_trimmed_sorted.bam_reads_1.5k_near_vp.bam	10.0001	Brain_1_viewpoint2_near_vp_min_downsampled.bam	Brain_1_viewpoint2_trimmed_sorted.bam_omit_1.5k_near_vp.bam	Brain_1_viewpoint2_ts_min_merged.bam
+# 	Brain_2_viewpoint2_trimmed_sorted.bam_reads_1.5k_near_vp.bam	10.0001	Brain_2_viewpoint2_near_vp_min_downsampled.bam	Brain_2_viewpoint2_trimmed_sorted.bam_omit_1.5k_near_vp.bam	Brain_2_viewpoint2_ts_min_merged.bam
+#	Face_1_viewpoint2_trimmed_sorted.bam_reads_1.5k_near_vp.bam	10.0001	Face_1_viewpoint2_near_vp_min_downsampled.bam	Face_1_viewpoint2_trimmed_sorted.bam_omit_1.5k_near_vp.bam	Face_1_viewpoint2_ts_min_merged.bam	
+#	Face_2_viewpoint2_trimmed_sorted.bam_reads_1.5k_near_vp.bam	10.0001	Face_2_viewpoint2_near_vp_min_downsampled.bam	Face_2_viewpoint2_trimmed_sorted.bam_omit_1.5k_near_vp.bam	Face_2_viewpoint2_ts_min_merged.bam
+
+
+# Reduce reads in the region 1.5kb around the viewpoint by taking a very small number of reads (~5-1000)in the _reads_1.5kb_near_vp bams, then merge with the omit_1.5kb_near_vp bams  
+cd ~/4C/Mouse_HoxA_4C_Combined/DATA/bam_files/nearvp_range_remove/vp2
+cat vp2_mid_downsampling.txt | awk '{print "samtools view "$1" -b -h -s "$2" -o "$3" >> vp2_mid_downsampled_bam.sh"}' > make_vp2_mid_downsampled_bam.sh
+echo "downsampling: taking 0.01% of the reads in the region 1.5kb +/- "vp2"..."
+chmod +x make_vp2_mid_downsampled_bam.sh
+./make_vp2_mid_downsampled_bam.sh
+
+# Check that 0.01% (for mid) or 0.001% (for min) got taken:																	
+cat vp2_mid_downsampling.txt| awk '{print "samtools view "$1" | wc -l"}' > vp2_mid_downsample_check.sh	
+cat vp2_mid_downsampling.txt| awk '{print "samtools view "$3" | wc -l"}' >> vp2_mid_downsample_check.sh												
+chmod +x vp2_mid_downsample_check.sh
+./vp2_mid_downsample_check.sh > vp2_mid_downsample_check.txt
+cat vp2_mid_downsample_check.sh | awk '{print $3}' | paste - vp2_mid_downsample_check.txt > vp2_mid_downsample_counts.txt
+echo $'\n'
+echo "counts near vp before and after downsampling"
+more vp2_mid_downsample_counts.txt 
+echo $'\n'
+cat vp2_mid_downsampling.txt | awk '{print "bamtools merge -in "$3" -in "$4" -out "$5}' > vp2_mid_addback.sh
+echo "merging bams for downsampled region near viewpoint and region >1.5kb from viewpoint..."
+chmod +x vp2_mid_addback.sh
+./vp2_mid_addback.sh
+
+# Check them to be sure there are more lines										
+cat vp2_mid_downsampling.txt| awk '{print "samtools view "$4" | wc -l"}' > vp2_mid_addback_check.sh	
+cat vp2_mid_downsampling.txt| awk '{print "samtools view "$5" | wc -l"}' >>vp2_mid_addback_check.sh
+chmod +x vp2_mid_addback_check.sh
+./vp2_mid_addback_check.sh > vp2_mid_addback_check.txt
+cat vp2_mid_addback_check.sh | awk '{print $3}' | paste - vp2_mid_addback_check.txt > vp2_mid_addback_counts.txt 
+echo "counts >1.5kb from viewpoint and counts in merged bam:"
+more vp2_mid_addback_counts.txt
+echo $'\n'
+
+# Check each and index
+echo "indexing merged bam files..."
+echo $'\n'
+ls *_ts_mid_merged.bam | awk '{print "samtools index -b "$1}' > vp2_index_mid_merged_bams.sh
+chmod +x vp2_index_mid_merged_bams.sh
+./vp2_index_mid_merged_bams.sh
+echo "indexed:"
+printf '%s\n' *_ts_mid_merged.bam.bai
+echo $'\n'
+echo "list of merged bam files:"
+ls *_ts_mid_merged.bam > vp2_mid_bfnormalize.txt #the original script was for brain/face normalization so named bfnormalize
+more vp2_mid_bfnormalize.txt
+printf $'\n'
+
+# Look at the output from "vp2_mid_addback_counts.txt" and subsample a rounded-down minimum number of reads from each (in this case 3E+06) 
+echo "counts in the merged bam files"
+more vp2_mid_addback_counts.txt | tail -4
+echo $'\n'
+echo "set subsample value and press [enter]:"
+read subsample
+# record the subsample used in this particular analysis: 2,000,000, lowest file was Brain_2_viewpoint2_trimmed_sorted_ts_mid_merged.bam	 2,407,005
+echo "subsample $subsample reads"
+
+# calculate what percent to take using awk, with some cleaning up:
+echo "awk '{print "$subsample"/X2}' vp2_mid_addback_counts.txt" > vp2_mid_subsample.txt
+sed -e 's/X/$/g' <vp2_mid_subsample.txt >vp2_how_to_subsample_mid.sh
+chmod +x vp2_how_to_subsample_mid.sh
+./vp2_how_to_subsample_mid.sh > vp2_percent_mid.txt
+more vp2_percent_mid.txt | tail -4
+echo $'\n'
+
+# add columns to vp2_mid_bfnormalize.txt
+#	file_names_from_ls	percent	file_name_no_ext	
+cat vp2_percent_mid.txt | tail -4 | awk '{print $1+10}' | paste vp2_mid_bfnormalize.txt - | paste - vp2_mid_bfnormalize.txt > vp2_mid_Face-Brain_norm.txt
+sed 's/.bam//2' <vp2_mid_Face-Brain_norm.txt >vp2_mid_Face-Brain_norm_final.txt
+echo "second column is for subsampling, percent to take + 10 (seeds random number generator)"
+more vp2_mid_Face-Brain_norm_final.txt
+echo $'\n'
+cat vp2_mid_Face-Brain_norm_final.txt | awk '{print "samtools view "$1" -b -h -s "$2" -o "$3"_mid_bfnorm.bam"}' > vp2_mid_Face-Brain_bam.sh
+# check the file before making executable
+echo "making normalized bam files according to these parameters..."
+more vp2_mid_Face-Brain_bam.sh
+chmod +x vp2_mid_Face-Brain_bam.sh
+./vp2_mid_Face-Brain_bam.sh
+echo $'\n'
+echo "done"
+
+### Write R scripts for r3Cseq to analyze interaction data across many windows with many different numbers of fragments excluded
+# example script for viewpoint3 with 0.01% (mid) reads added back near viewpoint and brain as control, face as experimental, two replicates each
+
+# add folders for different fragment sizes to the folders created at the beginning
+mkdir $WKDIR/vp3/mid/{5kb,10kb,15kb,20kb,25kb}/{0_frag,2_frag,5_frag}
+mkdir $WKDIR/vp3/mid/domainograms/{5kb,10kb,15kb,20kb,25kb}/{0_frag,2_frag,5_frag}
+echo "writing R scripts..."
+# for i in 5 10 15 20 25; do echo #test
+# "for viewpoint 1, Brain contr, Face exp (sub "Brain_Face_vp3_"$i"kb" for "myBatch_obj")"; done
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nBrain_Face_vp3_"$i"kb<-new(\x22r3CseqInBatch\x22,organismName='mm9',restrictionEnzyme='NlaIII'," \
+"\nisControlInvolved=TRUE,bamFilesDirectory=\x22"$BAMDIR"\x22," \
+"\nviewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nBamExpFiles=c(\x22Face_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22,\x22Face_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22)," \
+"\nBamContrFiles=c(\x22Brain_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22,\x22Brain_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22)," \
+"\nexpBatchLabel=c(\x22Face_1_vp3\x22,\x22Face_2_vp3\x22),contrBatchLabel=c(\x22Brain_1_vp3\x22,\x22Brain_2_vp3\x22))" \
+"\n\ngetBatchRawReads(Brain_Face_vp3_"$i"kb)" \
+"\ngetBatchReadCountPerWindow(Brain_Face_vp3_"$i"kb, windowSize = "$i"e3, nFragmentExcludedReadsNearViewpoint=5)" \
+"\ncalculateBatchRPM(Brain_Face_vp3_"$i"kb)" \
+"\ngetBatchInteractions(Brain_Face_vp3_"$i"kb,method=\x22intersection\x22)" \
+"\nsetwd(\x22$WKDIR/vp3/mid/"$i"kb/5_frag\x22)" \
+"\nexportBatchInteractions2text(Brain_Face_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint (Brain_Face_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_vp3_"$i"kb,\x22chr6\x22)" \
+"\ngenerate3CseqReport(Brain_Face_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_batch_vp3_"$i"_kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done > mid_Face_Brain_vp3_windows_5frag.r
+
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nBrain_Face_vp3_"$i"kb<-new(\x22r3CseqInBatch\x22,organismName='mm9',restrictionEnzyme='NlaIII'," \
+"\nisControlInvolved=TRUE,bamFilesDirectory=\x22"$BAMDIR"\x22," \
+"\nviewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nBamExpFiles=c(\x22Face_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22,\x22Face_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22)," \
+"\nBamContrFiles=c(\x22Brain_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22,\x22Brain_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22)," \
+"\nexpBatchLabel=c(\x22Face_1_vp3\x22,\x22Face_2_vp3\x22),contrBatchLabel=c(\x22Brain_1_vp3\x22,\x22Brain_2_vp3\x22))" \
+"\n\ngetBatchRawReads(Brain_Face_vp3_"$i"kb)" \
+"\ngetBatchReadCountPerWindow(Brain_Face_vp3_"$i"kb, windowSize = "$i"e3)" \
+"\ncalculateBatchRPM(Brain_Face_vp3_"$i"kb)" \
+"\ngetBatchInteractions(Brain_Face_vp3_"$i"kb,method=\x22intersection\x22)" \
+"\nsetwd(\x22$WKDIR/vp3/mid/"$i"kb/2_frag\x22)" \
+"\nexportBatchInteractions2text(Brain_Face_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint (Brain_Face_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_vp3_"$i"kb,\x22chr6\x22)" \
+"\ngenerate3CseqReport(Brain_Face_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_batch_vp3_"$i"_kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done > mid_Face_Brain_vp3_windows_2frag.r
+
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nBrain_Face_vp3_"$i"kb<-new(\x22r3CseqInBatch\x22,organismName='mm9',restrictionEnzyme='NlaIII'," \
+"\nisControlInvolved=TRUE,bamFilesDirectory=\x22"$BAMDIR"\x22," \
+"\nviewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nBamExpFiles=c(\x22Face_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22,\x22Face_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22)," \
+"\nBamContrFiles=c(\x22Brain_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22,\x22Brain_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22)," \
+"\nexpBatchLabel=c(\x22Face_1_vp3\x22,\x22Face_2_vp3\x22),contrBatchLabel=c(\x22Brain_1_vp3\x22,\x22Brain_2_vp3\x22))" \
+"\n\ngetBatchRawReads(Brain_Face_vp3_"$i"kb)" \
+"\ngetBatchReadCountPerWindow(Brain_Face_vp3_"$i"kb, windowSize = "$i"e3, nFragmentExcludedReadsNearViewpoint=0)" \
+"\ncalculateBatchRPM(Brain_Face_vp3_"$i"kb)" \
+"\ngetBatchInteractions(Brain_Face_vp3_"$i"kb,method=\x22intersection\x22)" \
+"\nsetwd(\x22$WKDIR/vp3/mid/"$i"kb/0_frag\x22)" \
+"\nexportBatchInteractions2text(Brain_Face_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint (Brain_Face_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_vp3_"$i"kb,\x22chr6\x22)" \
+"\ngenerate3CseqReport(Brain_Face_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_batch_vp3_"$i"_kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done > mid_Face_Brain_vp3_windows_0frag.r
+
+#### For individual replicates, to make domainograms (do these have to be at all windows?)
+# "for viewpoint 1, just Brain_1 and Face_1 (using Brain_Face_1_vp3_"$i"kb)"
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nexpFile<-\x22Face_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\ncontrFile<-\x22Brain_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\n\nBrain_Face_1_vp3_"$i"kb<-new(\x22r3Cseq\x22,organismName='mm9',alignedReadsBamExpFile=expFile," \
+"\nalignedReadsBamContrFile=contrFile,isControlInvolved=TRUE,viewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nexpLabel=\x22Face_1_vp3\x22,contrLabel=\x22Brain_1_vp3\x22,restrictionEnzyme='NlaIII')" \
+"\n\ngetRawReads(Brain_Face_1_vp3_"$i"kb)" \
+"\ngetReadCountPerWindow(Brain_Face_1_vp3_"$i"kb, windowSize = "$i"e3, nFragmentExcludedReadsNearViewpoint=5)" \
+"\ncalculateRPM(Brain_Face_1_vp3_"$i"kb)" \
+"\ngetInteractions(Brain_Face_1_vp3_"$i"kb)" \
+"\nsetwd(\x22"$WKDIR/vp3/mid/domainograms/"$i"kb"/5_frag\x22)" \
+"\nexportInteractions2text(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_1_vp3_"$i"kb,\x22chr6\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance =1500000)" \
+"\ngenerate3CseqReport(Brain_Face_1_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_1_vp3_"$i"kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\npdf(file = \x22Brain_Face_1_vp3_domain_large.pdf\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done >> mid_Face_Brain_vp3_windows_5frag.r
+
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nexpFile<-\x22Face_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\ncontrFile<-\x22Brain_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\n\nBrain_Face_1_vp3_"$i"kb<-new(\x22r3Cseq\x22,organismName='mm9',alignedReadsBamExpFile=expFile," \
+"\nalignedReadsBamContrFile=contrFile,isControlInvolved=TRUE,viewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nexpLabel=\x22Face_1_vp3\x22,contrLabel=\x22Brain_1_vp3\x22,restrictionEnzyme='NlaIII')" \
+"\n\ngetRawReads(Brain_Face_1_vp3_"$i"kb)" \
+"\ngetReadCountPerWindow(Brain_Face_1_vp3_"$i"kb, windowSize = "$i"e3)" \
+"\ncalculateRPM(Brain_Face_1_vp3_"$i"kb)" \
+"\ngetInteractions(Brain_Face_1_vp3_"$i"kb)" \
+"\nsetwd(\x22"$WKDIR/vp3/mid/domainograms/"$i"kb"/2_frag\x22)" \
+"\nexportInteractions2text(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_1_vp3_"$i"kb,\x22chr6\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance =1500000)" \
+"\ngenerate3CseqReport(Brain_Face_1_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_1_vp3_"$i"kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\npdf(file = \x22Brain_Face_1_vp3_domain_large.pdf\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done >> mid_Face_Brain_vp3_windows_2frag.r
+
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nexpFile<-\x22Face_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\ncontrFile<-\x22Brain_1_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\n\nBrain_Face_1_vp3_"$i"kb<-new(\x22r3Cseq\x22,organismName='mm9',alignedReadsBamExpFile=expFile," \
+"\nalignedReadsBamContrFile=contrFile,isControlInvolved=TRUE,viewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nexpLabel=\x22Face_1_vp3\x22,contrLabel=\x22Brain_1_vp3\x22,restrictionEnzyme='NlaIII')" \
+"\n\ngetRawReads(Brain_Face_1_vp3_"$i"kb)" \
+"\ngetReadCountPerWindow(Brain_Face_1_vp3_"$i"kb, windowSize = "$i"e3, nFragmentExcludedReadsNearViewpoint=0)" \
+"\ncalculateRPM(Brain_Face_1_vp3_"$i"kb)" \
+"\ngetInteractions(Brain_Face_1_vp3_"$i"kb)" \
+"\nsetwd(\x22"$WKDIR/vp3/mid/domainograms/"$i"kb"/0_frag\x22)" \
+"\nexportInteractions2text(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_1_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_1_vp3_"$i"kb,\x22chr6\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance =1500000)" \
+"\ngenerate3CseqReport(Brain_Face_1_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_1_vp3_"$i"kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\npdf(file = \x22Brain_Face_1_vp3_domain_large.pdf\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_1_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done >> mid_Face_Brain_vp3_windows_0frag.r
+
+# "for viewpoint 1, just Brain_2 and Face_2 (using Brain_Face_2_vp3_"$i"kb)"
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nexpFile<-\x22Face_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\ncontrFile<-\x22Brain_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\n\nBrain_Face_2_vp3_"$i"kb<-new(\x22r3Cseq\x22,organismName='mm9',alignedReadsBamExpFile=expFile," \
+"\nalignedReadsBamContrFile=contrFile,isControlInvolved=TRUE,viewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nexpLabel=\x22Face_2_vp3\x22,contrLabel=\x22Brain_2_vp3\x22,restrictionEnzyme='NlaIII')" \
+"\n\ngetRawReads(Brain_Face_2_vp3_"$i"kb)" \
+"\ngetReadCountPerWindow(Brain_Face_2_vp3_"$i"kb, windowSize = "$i"e3, nFragmentExcludedReadsNearViewpoint=5)" \
+"\ncalculateRPM(Brain_Face_2_vp3_"$i"kb)" \
+"\ngetInteractions(Brain_Face_2_vp3_"$i"kb)" \
+"\nsetwd(\x22"$WKDIR/vp3/mid/domainograms/"$i"kb"/5_frag\x22)" \
+"\nexportInteractions2text(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_2_vp3_"$i"kb,\x22chr6\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance =1500000)" \
+"\ngenerate3CseqReport(Brain_Face_2_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_2_vp3_"$i"kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\npdf(file = \x22Brain_Face_2_vp3_domain_large.pdf\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done >> mid_Face_Brain_vp3_windows_5frag.r
+
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nexpFile<-\x22Face_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\ncontrFile<-\x22Brain_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\n\nBrain_Face_2_vp3_"$i"kb<-new(\x22r3Cseq\x22,organismName='mm9',alignedReadsBamExpFile=expFile," \
+"\nalignedReadsBamContrFile=contrFile,isControlInvolved=TRUE,viewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nexpLabel=\x22Face_2_vp3\x22,contrLabel=\x22Brain_2_vp3\x22,restrictionEnzyme='NlaIII')" \
+"\n\ngetRawReads(Brain_Face_2_vp3_"$i"kb)" \
+"\ngetReadCountPerWindow(Brain_Face_2_vp3_"$i"kb, windowSize = "$i"e3)" \
+"\ncalculateRPM(Brain_Face_2_vp3_"$i"kb)" \
+"\ngetInteractions(Brain_Face_2_vp3_"$i"kb)" \
+"\nsetwd(\x22"$WKDIR/vp3/mid/domainograms/"$i"kb"/2_frag\x22)" \
+"\nexportInteractions2text(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_2_vp3_"$i"kb,\x22chr6\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance =1500000)" \
+"\ngenerate3CseqReport(Brain_Face_2_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_2_vp3_"$i"kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\npdf(file = \x22Brain_Face_2_vp3_domain_large.pdf\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done >> mid_Face_Brain_vp3_windows_2frag.r
+
+for i in 5 10 15 20 25; do echo -e "setwd(\x22"$BAMDIR"\x22)" \
+"\nexpFile<-\x22Face_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\ncontrFile<-\x22Brain_2_viewpoint3_ts_mid_merged_mid_bfnorm.bam\x22" \
+"\n\nBrain_Face_2_vp3_"$i"kb<-new(\x22r3Cseq\x22,organismName='mm9',alignedReadsBamExpFile=expFile," \
+"\nalignedReadsBamContrFile=contrFile,isControlInvolved=TRUE,viewpoint_chromosome='chr6'," \
+"\nviewpoint_primer_forward='GCTATCAAAGCCTTGGTTATT'," \
+"\nviewpoint_primer_reverse='TCCAATCACAACAAGTCATG'," \
+"\nexpLabel=\x22Face_2_vp3\x22,contrLabel=\x22Brain_2_vp3\x22,restrictionEnzyme='NlaIII')" \
+"\n\ngetRawReads(Brain_Face_2_vp3_"$i"kb)" \
+"\ngetReadCountPerWindow(Brain_Face_2_vp3_"$i"kb, windowSize = "$i"e3, nFragmentExcludedReadsNearViewpoint=0)" \
+"\ncalculateRPM(Brain_Face_2_vp3_"$i"kb)" \
+"\ngetInteractions(Brain_Face_2_vp3_"$i"kb)" \
+"\nsetwd(\x22"$WKDIR/vp3/mid/domainograms/"$i"kb"/0_frag\x22)" \
+"\nexportInteractions2text(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotOverviewInteractions(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_2_vp3_"$i"kb)" \
+"\nplotInteractionsPerChromosome(Brain_Face_2_vp3_"$i"kb,\x22chr6\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance =1500000)" \
+"\ngenerate3CseqReport(Brain_Face_2_vp3_"$i"kb)" \
+"\npdf(file = \x22Brain_Face_2_vp3_"$i"kb_large.pdf\x22)" \
+"\nplotInteractionsNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\npdf(file = \x22Brain_Face_2_vp3_domain_large.pdf\x22)" \
+"\nplotDomainogramNearViewpoint(Brain_Face_2_vp3_"$i"kb, distance = 1500000)" \
+"\ndev.off()" \
+"\n" \
+; done >> mid_Face_Brain_vp3_windows_0frag.r
+
+cd ~/4C/Mouse_HoxA_4C_Combined/DATA/bedgraphs/nearvp_range_removed/mid_bfnormalized
+mv *.r ~/4C/Mouse_HoxA_4C_Combined/ANALYSIS/r3Cseq/vp3/
+
+echo $'\n'
+echo "moved R scripts to ~/4C/Mouse_HoxA_4C_Combined/ANALYSIS/r3Cseq/vp3/"
+echo "done"
+
+#### Run R scripts in R using modified r3Cseq (https://github.com/cotneylab/r3Cseq) as per original r3Cseq package instructions (http://r3cseq.genereg.net/Site/index.html)
+
